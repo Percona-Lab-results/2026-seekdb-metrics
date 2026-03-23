@@ -1,0 +1,75 @@
+name: Run R Script
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # Allows manual trigger
+
+# Permissions required for GITHUB_TOKEN to deploy to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  
+jobs:
+  run-r-script:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # - name: Set up R
+      #   uses: r-lib/actions/setup-r@v2
+      #   with:
+      #     use-public-rspm: true # Speeds up installation on Linux
+
+      # - name: Set up Pandoc
+      #   uses: r-lib/actions/setup-pandoc@v2 # Required for many htmlwidgets
+
+      # - name: Install dependencies
+      #   run: |
+      #     # Install system dependencies if needed (e.g., libcurl for networking)
+      #     sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+          
+      #     # Install R packages
+      #     Rscript -e 'install.packages(c("htmlwidgets", "echarts4r"))'
+
+      # - name: Get changed files
+      #   id: changed-files
+      #   uses: tj-actions/changed-files@v45
+
+      # - name: Run R script
+      #  # env:
+      #  #   ALL_CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
+      #  run: Rscript visuals/mpstat_plot.R
+
+      # - name: Generate Throughput Report for OLTP Read-Write
+      #   run: Rscript visuals/throughput_report.R benchmark_logs sysbench_oltp_rw_seekdb_comparison.html "OLTP Read-Write SeekDB"
+
+      # - name: Generate Throughput Report for Remote OLTP Read-Write
+      #   run: Rscript visuals/throughput_report.R benchmark_remote_logs sysbench_remote_oltp_rw_comparison.html "OLTP Read-Write Network"
+
+      # - name: Generate Throughput Report for OLTP Read-Only
+      #   run: Rscript visuals/throughput_report.R benchmark_logs_read_only sysbench_oltp_ro_comparison.html "OLTP Read-Only"
+
+      # - name: Generate Index Page
+      #   run: Rscript visuals/make_index.R
+
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          # Note: Set path to '.' if index.html is at the root
+          # so it includes index.html AND the benchmark_logs folder
+          path: '.' 
+
+  # Make the site live
+  deploy:
+    # needs: run-r-script
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
