@@ -645,7 +645,7 @@ secure_auth	ON
 secure_file_priv	/
 server_id	1
 server_id_bits	32
-server_uuid	f3a7db9d-2458-11f1-b6d3-ac1f6bc8457b
+server_uuid	a6fa2889-26bd-11f1-af36-ac1f6bc8457b
 session_track_gtids	OFF
 session_track_schema	ON
 session_track_state_change	OFF
