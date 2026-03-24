@@ -389,13 +389,13 @@ function init() {
   fillOptions(el("memAnchor"), MEMS);
 
   const defaultServers = SERVERS.filter(s =>
-    s.startsWith("mariadb 12") || s.startsWith("mysql 8.4") || s.startsWith("mysql 9.6") || s.startsWith("percona-server 8.4")
+    s.startsWith("seekdb 5.7") || s.startsWith("mysql 5.7") || s.startsWith("percona-server 5.7")
   );
   setSelected(el("serverSel"), v => defaultServers.includes(v));
-  setSelected(el("memSel"), v => Number(v) === 12);
+  setSelected(el("memSel"), v => Number(v) === 32);
 
   el("threadsAnchor").value = 64;
-  el("memAnchor").value = 12;
+  el("memAnchor").value = 32;
 
   ["serverSel","memSel","metricSel","xSel","threadsAnchor","memAnchor"].forEach(id => {
     el(id).addEventListener("change", render);

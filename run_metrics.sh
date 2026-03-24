@@ -6,9 +6,10 @@ DB_USER="root"
 DB_PASS="password"
 DB_DATABASE="sbtest"
 POOL_SIZES=(32 12 2)      # The 3 Tiers (GB)
-PORT=3306
+#POOL_SIZES=(2)
 
 THREADS=(1 4 16 32 64 128 256 512)
+#THREADS=(512)
 
 # --- DEBUG SETTINGS ---
 TABLE_ROWS=5000000
@@ -29,12 +30,6 @@ if [[ "$DBMS_NAME" == "percona-server" ]]; then
     CONF_D_DIR="my.cnf.d"
 fi
 
-if [[ "$DBMS_NAME" == "seekdb" ]]; then
-    IMAGE_PREFIX="oceanbase/"
-    CONF_D_DIR="oceanbase"
-    PORT=2881
-fi
-
 if [[ "$DBMS_NAME" == "mariadb" ]]; then
     ADMIN_TOOL="mariadb-admin"
 else
@@ -47,13 +42,13 @@ CONTAINER_NAME="dbms-benchmark-test"
 
 MYSQL_ROOT_PASSWORD="password"
 CONFIG_DIR="$HOME/configs"
-CONFIG_NAME="seekdb.sql"
-CONFIG_PATH="$CONFIG_DIR/$CONFIG_NAME"
+CONFIG_PATH="$CONFIG_DIR/config.cnf"
 
 
 server_wait() {
   # Wait for MySQL to be ready
-  echo "Waiting for DB Server to initialize ..."
+  echo "Waiting for DB Server to initialize..."
+  sleep 5
 
   # Check that the container exists and is running
   if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null)" != "true" ]; then
@@ -61,13 +56,10 @@ server_wait() {
     exit 1
   fi
 
-  # local CMD="docker exec \"${CONTAINER_NAME}\" \"${ADMIN_TOOL}\" ping --host=127.0.0.1 --port=${PORT} -u\"root\" -p\"${DB_PASS}\" 2>/dev/null;"
-  # echo "Executing server readiness check: $CMD"
-  until docker exec "$CONTAINER_NAME" mysql --host=127.0.0.1 --port=$PORT -u"root" -p"$DB_PASS" -N -e "SELECT 1;" 2>/dev/null; do
+  until docker exec "$CONTAINER_NAME" "$ADMIN_TOOL" ping --host=127.0.0.1 -u"root" -p"$DB_PASS" 2>/dev/null; do
     echo "Waiting..."       
     sleep 2
   done
-  echo "Server is ready!"
 }
 
 stop_container() {
@@ -80,24 +72,13 @@ stop_container() {
 
 run_container() {
   local DIR=$1
-  
-  # Store the command and its arguments in an array
-  local cmd=(
-    docker run --rm --name "$CONTAINER_NAME"
-    --network host
-    -v "${CONFIG_DIR}:/root/boot/init.d/${CONF_D_DIR}"
-    -e INIT_SCRIPTS_PATH="/root/boot/init.d/${CONF_D_DIR}"
-    -e ROOT_PASSWORD="$MYSQL_ROOT_PASSWORD"
-    -e SEEKDB_DATABASE="$DB_DATABASE"
-    -e MYSQL_ROOT_HOST='%'
-    -d "${IMAGE_NAME}"
-  )
-
-  # Print the command (expands array into a single space-separated string)
-  echo "Executing: ${cmd[*]}"
-
-  # Execute the command (preserves exact quoting for each argument)
-  "${cmd[@]}"
+  docker run --user mysql --rm --name "$CONTAINER_NAME" \
+    --network host \
+    -v "${CONFIG_DIR}:/etc/${CONF_D_DIR}" \
+    -e MYSQL_ROOT_PASSWORD="$MYSQL_ROOT_PASSWORD" \
+    -e MYSQL_DATABASE="$DB_DATABASE" \
+    -e MYSQL_ROOT_HOST='%' \
+    -d ${IMAGE_NAME}
 }
 
 # Make sure no containers are running at this stage.
@@ -119,7 +100,7 @@ sudo rm -rf "$CONFIG_PATH"
 run_container "$BENCH_DIR"
 server_wait 
 
-RAW_VERSION=$(mysql -h $DB_HOST --port=$PORT -u $DB_USER -p$DB_PASS -N -e "SELECT REPLACE(VERSION(), ' ', '-');")
+RAW_VERSION=$(mysql -h $DB_HOST -u $DB_USER -p$DB_PASS -N -e "SELECT VERSION();" 2>/dev/null)
 MAJOR_VER=$(echo $RAW_VERSION | cut -d'.' -f1,2)
 IS_MARIA=$(echo $RAW_VERSION | grep -i "Maria" | wc -l)
 
@@ -134,7 +115,7 @@ check_innodb_buffer() {
 
     # Get the value in bytes and divide by 1024^3 to get GB
     # Note: MySQL returns an integer; we use shell arithmetic to convert
-    local ACTUAL_BYTES=$(mysql -h "$DB_HOST" --port=$PORT -u "$DB_USER" -p"$DB_PASS" -N -s -e "SELECT @@innodb_buffer_pool_size;" 2>/dev/null)
+    local ACTUAL_BYTES=$(mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" -N -s -e "SELECT @@innodb_buffer_pool_size;" 2>/dev/null)
     local ACTUAL_GB=$(( ACTUAL_BYTES / 1024 / 1024 / 1024 ))
 
     if [ "$ACTUAL_GB" -ne "$EXPECTED_GB" ]; then
@@ -143,7 +124,7 @@ check_innodb_buffer() {
         echo "Aborting entire benchmark script immediately."
         echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
         
-        # docker stop "$CONTAINER_NAME" 2>/dev/null
+        docker stop "$CONTAINER_NAME" 2>/dev/null
         # Immediate termination of the script
         exit 1
     fi
@@ -156,9 +137,7 @@ check_vars_status() {
     echo ">>> Capturing server variables and status..."
 
     # Capture MySQL server variables into file
-    CMD="mysql -h \"$DB_HOST\" --port=$PORT -u \"$DB_USER\" -p\"$DB_PASS\" -N -e \"SHOW VARIABLES;\" > \"${FILE_PREFIX}.vars.txt\" 2>/dev/null"
-    echo "Executing: $CMD"
-    eval $CMD
+    mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" -N -e "SHOW VARIABLES;" > "${FILE_PREFIX}.vars.txt" 2>/dev/null
     if [ $? -eq 0 ]; then
         echo "    Variables saved to: ${FILE_PREFIX}.vars.txt"
     else
@@ -166,7 +145,7 @@ check_vars_status() {
     fi
 
     # Capture MySQL server status into file
-    mysql -h "$DB_HOST" --port=$PORT -u "$DB_USER" -p"$DB_PASS" -N -e "SHOW STATUS;" > "${FILE_PREFIX}.status.txt" 2>/dev/null
+    mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" -N -e "SHOW STATUS;" > "${FILE_PREFIX}.status.txt" 2>/dev/null
     if [ $? -eq 0 ]; then
         echo "    Status saved to: ${FILE_PREFIX}.status.txt"
     else
@@ -176,7 +155,7 @@ check_vars_status() {
 
 run_mysql_summary() {
     local FILE_PREFIX=$1
-    ./pt-mysql-summary --host="$DB_HOST" --port=$PORT --user="$DB_USER" --password="$DB_PASS" > "${FILE_PREFIX}-pt-mysql-summary.txt"
+    ./pt-mysql-summary --host="$DB_HOST" --user="$DB_USER" --password="$DB_PASS" > "${FILE_PREFIX}-pt-mysql-summary.txt"
     if [ $? -eq 0 ]; then
         echo "    Server summary saved to: ${FILE_PREFIX}-pt-mysql-summary.txt"
     else
@@ -186,86 +165,84 @@ run_mysql_summary() {
 
 
 # --- CONFIGURATION GENERATOR ---
-
 generate_config() {
     local SIZE=$1
-    
-    # Optional: ensure the output filename reflects that it's SQL now
-    local CFG="/tmp/${CONFIG_NAME%.*}.sql" 
-    rm -f "$CFG"
+    local CFG="/tmp/config.cnf"
+    rm "$CFG"
 
     # 1. Start Base Config
-    # Using a heredoc (cat <<EOF) is much cleaner for multi-line file writing
-    cat <<EOF > "$CFG"
--- Dynamic Variables
-SET GLOBAL innodb_buffer_pool_size = ${SIZE} * 1073741824;
-SET GLOBAL max_prepared_stmt_count = 1000000;
-SET GLOBAL max_connections = 4096;
-SET GLOBAL join_buffer_size = 262144;
-SET GLOBAL sort_buffer_size = 262144;
-SET GLOBAL innodb_io_capacity = 2500;
-SET GLOBAL innodb_io_capacity_max = 5000;
-SET GLOBAL table_open_cache = 200000;
-SET GLOBAL connect_timeout = 60;
-SET GLOBAL character_set_server = 'utf8mb4';
-SET GLOBAL innodb_flush_log_at_trx_commit = 1;
-SET GLOBAL server_id = 1;
-SET GLOBAL sync_binlog = 1;
--- SET GLOBAL binlog_format = 'ROW';
-SET GLOBAL binlog_row_image = 'MINIMAL';
+    echo "[mysqld]" > "$CFG"
+    echo "innodb_buffer_pool_size = ${SIZE}G" >> "$CFG"
+    echo "max_prepared_stmt_count = 1000000" >> "$CFG"
+    echo "max_connections = 4096" >> "$CFG"
+    echo "join_buffer_size = 256K" >> "$CFG"
+    echo "sort_buffer_size = 256K" >> "$CFG"
+    echo "innodb_io_capacity = 2500" >> "$CFG"
+    echo "innodb_io_capacity_max = 5000" >> "$CFG"
+    echo "table_open_cache = 200000" >> "$CFG"
+    echo "table_open_cache_instances = 64" >> "$CFG"
+    echo "back_log = 3500" >> "$CFG"
+    echo "connect_timeout = 60" >> "$CFG"
+    echo "character_set_server = utf8mb4" >> "$CFG"
 
--- Read-Only Variables (Cannot be changed at runtime, must go in my.cnf)
--- SET GLOBAL table_open_cache_instances = 64;
--- SET GLOBAL back_log = 3500;
--- SET GLOBAL innodb_doublewrite = 1;
--- SET GLOBAL innodb_flush_method = 'O_DIRECT';
--- SET GLOBAL innodb_log_buffer_size = 67108864;
--- SET GLOBAL log_bin = 'binlog';
-EOF
+    echo "innodb_doublewrite = 1" >> "$CFG"
+    echo "innodb_flush_log_at_trx_commit = 1" >> "$CFG"
+    echo "innodb_flush_method = O_DIRECT" >> "$CFG"
+    echo "innodb_log_buffer_size = 64M" >> "$CFG"
+
+    # In 5.7, server_id must be specified if binary logging is enabled, otherwise the server is not allowed to start.
+    echo "server_id = 1" >> "$CFG"
+    echo "log_bin = binlog" >> "$CFG"
+    echo "sync_binlog = 1" >> "$CFG"
+    echo "binlog_format = ROW" >> "$CFG"
+    echo "binlog_row_image = MINIMAL" >> "$CFG"
 
     # 2. Instance Sizing
     if [ "$SIZE" -lt 8 ]; then
-        echo "-- SET GLOBAL innodb_buffer_pool_instances = 1; -- (Read-Only)" >> "$CFG"
+        echo "innodb_buffer_pool_instances = 1" >> "$CFG"
     else
-        echo "-- SET GLOBAL innodb_buffer_pool_instances = 8; -- (Read-Only)" >> "$CFG"
+        echo "innodb_buffer_pool_instances = 8" >> "$CFG"
     fi
 
     # 3. VERSION SPECIFIC LOGIC
     if [ "$IS_MARIA" -eq 1 ]; then
         # --- MARIADB ---
+        # Query Cache removed in 12.1+
         if [ "${MAJOR_VER%%.*}" -lt 12 ]; then
-            echo "-- SET GLOBAL query_cache_type = 0; -- (Read-Only)" >> "$CFG"
-            echo "SET GLOBAL query_cache_size = 0;" >> "$CFG"
+            echo "query_cache_type = 0" >> "$CFG"
+            echo "query_cache_size = 0" >> "$CFG"
         fi
-        echo "-- SET GLOBAL innodb_log_file_size = 2147483648; -- (Read-Only)" >> "$CFG"
-        echo "-- SET GLOBAL innodb_log_files_in_group = 2; -- (Read-Only)" >> "$CFG"
-        echo "-- SET GLOBAL thread_handling = 'one-thread-per-connection'; -- (Read-Only)" >> "$CFG"
+        echo "innodb_log_file_size = 2G" >> "$CFG"
+        echo "innodb_log_files_in_group = 2" >> "$CFG"
+        echo "thread_handling = one-thread-per-connection" >> "$CFG"
 
     elif [[ "$MAJOR_VER" == "5.7" ]]; then
         # --- MYSQL / PERCONA 5.7 ---
-        echo "-- SET GLOBAL innodb_log_file_size = 2147483648; -- (Read-Only)" >> "$CFG"
-        echo "-- SET GLOBAL innodb_log_files_in_group = 2; -- (Read-Only)" >> "$CFG"
-        echo "-- SET GLOBAL query_cache_type = 0; -- (Read-Only)" >> "$CFG"
-        echo "SET GLOBAL query_cache_size = 0;" >> "$CFG"
-        echo "SET GLOBAL innodb_checksum_algorithm = 'crc32';" >> "$CFG"
+        echo "innodb_log_file_size = 2G" >> "$CFG"
+        echo "innodb_log_files_in_group = 2" >> "$CFG"
+        echo "query_cache_type = 0" >> "$CFG"
+        echo "query_cache_size = 0" >> "$CFG"
+        echo "innodb_checksum_algorithm = crc32" >> "$CFG"
 
     elif [[ "$MAJOR_VER" == "8.0" ]]; then
         # --- MYSQL / PERCONA 8.0 ---
-        echo "-- SET GLOBAL innodb_log_file_size = 2147483648; -- (Read-Only)" >> "$CFG"
-        echo "-- SET GLOBAL innodb_log_files_in_group = 2; -- (Read-Only)" >> "$CFG"
-        echo "SET GLOBAL innodb_change_buffering = 'none';" >> "$CFG"
+        # NOTE: query_cache is REMOVED. Including it here prevents startup.
+        echo "innodb_log_file_size = 2G" >> "$CFG"
+        echo "innodb_log_files_in_group = 2" >> "$CFG"
+        echo "innodb_change_buffering = none" >> "$CFG"
 
     else
         # --- MYSQL 8.4 / 9.x ---
-        echo "SET GLOBAL innodb_redo_log_capacity = 4294967296;" >> "$CFG"
-        echo "SET GLOBAL innodb_change_buffering = 'none';" >> "$CFG"
+        # Modern redo log handling
+        echo "innodb_redo_log_capacity = 4G" >> "$CFG"
+        echo "innodb_change_buffering = none" >> "$CFG"
     fi
 
     # 4. Deploy Config
     # Ensure directory exists and copy
     mkdir -p "$CONFIG_DIR"
     sudo cp "$CFG" "$CONFIG_PATH"
-    cp "$CFG" "${LOG_DIR}/Tier${SIZE}G.sql.txt"
+    cp "$CFG" "${LOG_DIR}/Tier${SIZE}G.cnf.txt"
 
     # Optional: Fix permissions to ensure Docker mysql user can read it
     sudo chmod 644 "$CONFIG_PATH"
@@ -294,10 +271,11 @@ stop_metrics() {
 init_data() {
   local OUTPUT_FILE="$1.init_data.txt"
   start_time=$(date +%s)
+
   echo ">>> Create tables and insert data..."
-  sysbench oltp_read_only --mysql-host=$DB_HOST --mysql-port=$PORT --mysql-user=$DB_USER --mysql-password=$DB_PASS \
+  sysbench oltp_read_only --mysql-host=$DB_HOST --mysql-user=$DB_USER --mysql-password=$DB_PASS \
     --mysql-db=$DB_DATABASE --tables=20 --table-size=$TABLE_ROWS --threads=64 prepare
-  
+
   end_time=$(date +%s)
   duration=$((end_time - start_time))
 
@@ -322,22 +300,23 @@ for SIZE in "${POOL_SIZES[@]}"; do
   echo "Container restarted with custom config."
   check_innodb_buffer $SIZE
   check_vars_status "${LOG_DIR}/Tier${SIZE}G"
-  
   init_data "${LOG_DIR}/Tier${SIZE}G"
   run_mysql_summary "${LOG_DIR}/Tier${SIZE}G"
 
+  # continue # SKIP BENCHMARKS FOR NOW, REMOVE ME WHEN READY
+  
   # 2. WARMUP (Reads then Writes)
   echo ">>> Warmup A: Read-Only (${WARMUP_RO_TIME}s)..."
-  sysbench oltp_read_only --mysql-host=$DB_HOST --mysql-port=$PORT --mysql-user=$DB_USER --mysql-password=$DB_PASS \
-    --mysql-db=$DB_DATABASE --tables=20 --table-size=$TABLE_ROWS --threads=16 --db-ps-mode=disable --time=$WARMUP_RO_TIME run
+  sysbench oltp_read_only --mysql-host=$DB_HOST --mysql-user=$DB_USER --mysql-password=$DB_PASS \
+    --mysql-db=$DB_DATABASE --tables=20 --table-size=$TABLE_ROWS --threads=16 --time=$WARMUP_RO_TIME run
 
   if [ "$IS_READ_ONLY" == "1" ]; then
     echo "Read-only mode enabled, skipping read-write warmup and benchmarks."
     TEST_TYPE="oltp_read_only"
   else
     echo ">>> Warmup B: Dirty Writes (${WARMUP_RW_TIME}s)..."
-    sysbench oltp_read_write --mysql-host=$DB_HOST --mysql-port=$PORT --mysql-user=$DB_USER --mysql-password=$DB_PASS \
-        --mysql-db=$DB_DATABASE --tables=20 --table-size=$TABLE_ROWS --threads=64 --db-ps-mode=disable --time=$WARMUP_RW_TIME run
+    sysbench oltp_read_write --mysql-host=$DB_HOST --mysql-user=$DB_USER --mysql-password=$DB_PASS \
+        --mysql-db=$DB_DATABASE --tables=20 --table-size=$TABLE_ROWS --threads=64 --time=$WARMUP_RW_TIME run
     TEST_TYPE="oltp_read_write"
   fi
 
@@ -350,7 +329,6 @@ for SIZE in "${POOL_SIZES[@]}"; do
 
       sysbench $TEST_TYPE \
         --mysql-host=$DB_HOST \
-        --mysql-port=$PORT \
         --mysql-user=$DB_USER \
         --mysql-password=$DB_PASS \
         --mysql-db=$DB_DATABASE \
@@ -360,7 +338,6 @@ for SIZE in "${POOL_SIZES[@]}"; do
         --time=$DURATION \
         --report-interval=1 \
         --rand-type=uniform \
-        --db-ps-mode=disable \
         --mysql-ssl=off \
         run > "${FILE_PREFIX}.sysbench.txt"
 
