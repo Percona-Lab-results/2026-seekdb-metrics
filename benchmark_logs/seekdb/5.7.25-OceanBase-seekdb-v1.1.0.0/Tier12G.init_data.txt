@@ -1,1 +1,1 @@
-Data initialization took -1774015667 seconds
+Data initialization took 292 seconds

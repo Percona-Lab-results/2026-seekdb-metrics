@@ -31,7 +31,7 @@ fi
 
 if [[ "$DBMS_NAME" == "seekdb" ]]; then
     IMAGE_PREFIX="oceanbase/"
-    CONF_D_DIR="oceanbase"
+    CONF_D_DIR="seekdb"
     PORT=2881
 fi
 
@@ -45,9 +45,8 @@ IMAGE_NAME="${IMAGE_PREFIX}${DBMS_NAME}:${DBMS_VER}"
 
 CONTAINER_NAME="dbms-benchmark-test"
 
-MYSQL_ROOT_PASSWORD="password"
 CONFIG_DIR="$HOME/configs"
-CONFIG_NAME="seekdb.sql"
+CONFIG_NAME="seekdb.cnf"
 CONFIG_PATH="$CONFIG_DIR/$CONFIG_NAME"
 
 
@@ -79,17 +78,22 @@ stop_container() {
 }
 
 run_container() {
-  local DIR=$1
-  
+  local MEMSIZE=$(( $1 + 2 ))
+#   if [ $2 == 1 ]; then
+#     local VOLUME="-v ${CONFIG_DIR}:/etc/${CONF_D_DIR}"
+#   fi
+
   # Store the command and its arguments in an array
   local cmd=(
     docker run --rm --name "$CONTAINER_NAME"
     --network host
-    -v "${CONFIG_DIR}:/root/boot/init.d/${CONF_D_DIR}"
-    -e INIT_SCRIPTS_PATH="/root/boot/init.d/${CONF_D_DIR}"
-    -e ROOT_PASSWORD="$MYSQL_ROOT_PASSWORD"
+    --memory "${MEMSIZE}g"
+    -e CPU_COUNT=0
+    -e MEMORY_LIMIT=${SIZE}G
+    -e DATAFILE_MAXSIZE=512G
+    -e LOG_DISK_SIZE=4G
+    -e ROOT_PASSWORD=$DB_PASS
     -e SEEKDB_DATABASE="$DB_DATABASE"
-    -e MYSQL_ROOT_HOST='%'
     -d "${IMAGE_NAME}"
   )
 
@@ -116,7 +120,7 @@ echo "Removing old config if exists: $CONFIG_PATH"
 sudo rm -rf "$CONFIG_PATH"
 
 # --- THIS NEEDS TO BE DONE IF A VERSION IS "latest" ---
-run_container "$BENCH_DIR"
+run_container 2
 server_wait 
 
 RAW_VERSION=$(mysql -h $DB_HOST --port=$PORT -u $DB_USER -p$DB_PASS -N -e "SELECT REPLACE(VERSION(), ' ', '-');")
@@ -134,12 +138,11 @@ check_innodb_buffer() {
 
     # Get the value in bytes and divide by 1024^3 to get GB
     # Note: MySQL returns an integer; we use shell arithmetic to convert
-    local ACTUAL_BYTES=$(mysql -h "$DB_HOST" --port=$PORT -u "$DB_USER" -p"$DB_PASS" -N -s -e "SELECT @@innodb_buffer_pool_size;" 2>/dev/null)
-    local ACTUAL_GB=$(( ACTUAL_BYTES / 1024 / 1024 / 1024 ))
+    local ACTUAL_GB=$(mysql -h "$DB_HOST" --port=$PORT -u "$DB_USER" -p"$DB_PASS" -N -s -e "show parameters like 'memory_limit'\\G" | grep -A5 'memory_limit' | awk 'NR==3' 2>/dev/null)
 
-    if [ "$ACTUAL_GB" -ne "$EXPECTED_GB" ]; then
+    if [ "$ACTUAL_GB" != "${EXPECTED_GB}G" ]; then
         echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-        echo "CRITICAL ERROR: Buffer Pool is ${ACTUAL_GB}GB (Expected ${EXPECTED_GB}GB)"
+        echo "CRITICAL ERROR: Buffer Pool is ${ACTUAL_GB} (Expected ${EXPECTED_GB}G)"
         echo "Aborting entire benchmark script immediately."
         echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
         
@@ -148,7 +151,7 @@ check_innodb_buffer() {
         exit 1
     fi
 
-    echo "Verification successful: Buffer Pool is ${ACTUAL_GB}GB."
+    echo "Verification successful: Buffer Pool is ${ACTUAL_GB}."
 }
 
 check_vars_status() {
@@ -191,81 +194,24 @@ generate_config() {
     local SIZE=$1
     
     # Optional: ensure the output filename reflects that it's SQL now
-    local CFG="/tmp/${CONFIG_NAME%.*}.sql" 
+    local CFG="/tmp/${CONFIG_NAME}" 
     rm -f "$CFG"
 
     # 1. Start Base Config
     # Using a heredoc (cat <<EOF) is much cleaner for multi-line file writing
     cat <<EOF > "$CFG"
--- Dynamic Variables
-SET GLOBAL innodb_buffer_pool_size = ${SIZE} * 1073741824;
-SET GLOBAL max_prepared_stmt_count = 1000000;
-SET GLOBAL max_connections = 4096;
-SET GLOBAL join_buffer_size = 262144;
-SET GLOBAL sort_buffer_size = 262144;
-SET GLOBAL innodb_io_capacity = 2500;
-SET GLOBAL innodb_io_capacity_max = 5000;
-SET GLOBAL table_open_cache = 200000;
-SET GLOBAL connect_timeout = 60;
-SET GLOBAL character_set_server = 'utf8mb4';
-SET GLOBAL innodb_flush_log_at_trx_commit = 1;
-SET GLOBAL server_id = 1;
-SET GLOBAL sync_binlog = 1;
--- SET GLOBAL binlog_format = 'ROW';
-SET GLOBAL binlog_row_image = 'MINIMAL';
-
--- Read-Only Variables (Cannot be changed at runtime, must go in my.cnf)
--- SET GLOBAL table_open_cache_instances = 64;
--- SET GLOBAL back_log = 3500;
--- SET GLOBAL innodb_doublewrite = 1;
--- SET GLOBAL innodb_flush_method = 'O_DIRECT';
--- SET GLOBAL innodb_log_buffer_size = 67108864;
--- SET GLOBAL log_bin = 'binlog';
+ROOT_PASSWORD=${DB_PASS}
+MEMORY_LIMIT=${SIZE}G
+LOG_DISK_SIZE=${SIZE}G
+CPU_COUNT=0
+DATAFILE_MAXSIZE=512G
 EOF
-
-    # 2. Instance Sizing
-    if [ "$SIZE" -lt 8 ]; then
-        echo "-- SET GLOBAL innodb_buffer_pool_instances = 1; -- (Read-Only)" >> "$CFG"
-    else
-        echo "-- SET GLOBAL innodb_buffer_pool_instances = 8; -- (Read-Only)" >> "$CFG"
-    fi
-
-    # 3. VERSION SPECIFIC LOGIC
-    if [ "$IS_MARIA" -eq 1 ]; then
-        # --- MARIADB ---
-        if [ "${MAJOR_VER%%.*}" -lt 12 ]; then
-            echo "-- SET GLOBAL query_cache_type = 0; -- (Read-Only)" >> "$CFG"
-            echo "SET GLOBAL query_cache_size = 0;" >> "$CFG"
-        fi
-        echo "-- SET GLOBAL innodb_log_file_size = 2147483648; -- (Read-Only)" >> "$CFG"
-        echo "-- SET GLOBAL innodb_log_files_in_group = 2; -- (Read-Only)" >> "$CFG"
-        echo "-- SET GLOBAL thread_handling = 'one-thread-per-connection'; -- (Read-Only)" >> "$CFG"
-
-    elif [[ "$MAJOR_VER" == "5.7" ]]; then
-        # --- MYSQL / PERCONA 5.7 ---
-        echo "-- SET GLOBAL innodb_log_file_size = 2147483648; -- (Read-Only)" >> "$CFG"
-        echo "-- SET GLOBAL innodb_log_files_in_group = 2; -- (Read-Only)" >> "$CFG"
-        echo "-- SET GLOBAL query_cache_type = 0; -- (Read-Only)" >> "$CFG"
-        echo "SET GLOBAL query_cache_size = 0;" >> "$CFG"
-        echo "SET GLOBAL innodb_checksum_algorithm = 'crc32';" >> "$CFG"
-
-    elif [[ "$MAJOR_VER" == "8.0" ]]; then
-        # --- MYSQL / PERCONA 8.0 ---
-        echo "-- SET GLOBAL innodb_log_file_size = 2147483648; -- (Read-Only)" >> "$CFG"
-        echo "-- SET GLOBAL innodb_log_files_in_group = 2; -- (Read-Only)" >> "$CFG"
-        echo "SET GLOBAL innodb_change_buffering = 'none';" >> "$CFG"
-
-    else
-        # --- MYSQL 8.4 / 9.x ---
-        echo "SET GLOBAL innodb_redo_log_capacity = 4294967296;" >> "$CFG"
-        echo "SET GLOBAL innodb_change_buffering = 'none';" >> "$CFG"
-    fi
 
     # 4. Deploy Config
     # Ensure directory exists and copy
     mkdir -p "$CONFIG_DIR"
     sudo cp "$CFG" "$CONFIG_PATH"
-    cp "$CFG" "${LOG_DIR}/Tier${SIZE}G.sql.txt"
+    cp "$CFG" "${LOG_DIR}/Tier${SIZE}G.cnf.txt"
 
     # Optional: Fix permissions to ensure Docker mysql user can read it
     sudo chmod 644 "$CONFIG_PATH"
@@ -317,7 +263,7 @@ for SIZE in "${POOL_SIZES[@]}"; do
   stop_container $CONTAINER_NAME
 
   echo "Starting server with the new config..."
-  run_container "$LOG_DIR" "$CONTAINER_NAME"
+  run_container $SIZE 1
   server_wait "$CONTAINER_NAME"
   echo "Container restarted with custom config."
   check_innodb_buffer $SIZE

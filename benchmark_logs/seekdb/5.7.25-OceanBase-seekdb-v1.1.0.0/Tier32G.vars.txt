@@ -21,7 +21,7 @@ binlog_gtid_simple_recovery	1
 binlog_max_flush_queue_time	0
 binlog_order_commits	1
 binlog_rows_query_log_events	OFF
-binlog_row_image	MINIMAL
+binlog_row_image	FULL
 binlog_stmt_cache_size	32768
 binlog_transaction_dependency_history_size	25000
 binlog_transaction_dependency_tracking	COMMIT_ORDER
@@ -45,7 +45,7 @@ concurrent_insert	AUTO
 connection_control_failed_connections_threshold	0
 connection_control_max_connection_delay	2147483647
 connection_control_min_connection_delay	1000
-connect_timeout	60
+connect_timeout	10
 core_file	OFF
 cte_max_recursion_depth	1000
 cursor_sharing	FORCE
@@ -163,7 +163,7 @@ innodb_buffer_pool_instances	8
 innodb_buffer_pool_load_abort	OFF
 innodb_buffer_pool_load_at_startup	ON
 innodb_buffer_pool_load_now	OFF
-innodb_buffer_pool_size	34359738368
+innodb_buffer_pool_size	134217728
 innodb_change_buffering	all
 innodb_change_buffering_debug	0
 innodb_change_buffer_max_size	25
@@ -344,7 +344,7 @@ max_allowed_packet	16777216
 max_binlog_cache_size	18446744073709500416
 max_binlog_size	1073741824
 max_binlog_stmt_cache_size	18446744073709500416
-max_connections	4096
+max_connections	2147483647
 max_connect_errors	100
 max_delayed_threads	20
 max_digest_length	1024
@@ -529,7 +529,7 @@ optimizer_use_sql_plan_baselines	OFF
 parallel_degree_limit	0
 parallel_degree_policy	MANUAL
 parallel_min_scan_time_threshold	1000
-parallel_servers_target	10
+parallel_servers_target	40
 parser_max_mem_size	18446744073709551615
 partition_index_dive_limit	10
 performance_schema	OFF
@@ -645,7 +645,7 @@ secure_auth	ON
 secure_file_priv	/
 server_id	1
 server_id_bits	32
-server_uuid	a6fa2889-26bd-11f1-af36-ac1f6bc8457b
+server_uuid	e775ac23-2852-11f1-b703-ac1f6bc8457d
 session_track_gtids	OFF
 session_track_schema	ON
 session_track_state_change	OFF
