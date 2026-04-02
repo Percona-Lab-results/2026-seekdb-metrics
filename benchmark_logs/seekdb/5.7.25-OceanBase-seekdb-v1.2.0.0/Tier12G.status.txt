@@ -1,0 +1,2 @@
+Threads_connected	10
+Uptime	4
